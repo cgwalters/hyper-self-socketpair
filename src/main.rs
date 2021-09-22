@@ -9,7 +9,7 @@ use std::io::Write;
 
 async fn self_bits() -> Result<impl Stream<Item = std::io::Result<Bytes>>> {
     let mut ret = futures_util::stream::empty().boxed();
-    for _ in 0..10 {
+    for _ in 0..6 {
         let f = tokio::fs::File::open("/proc/self/exe").await?;
         let f = tokio_util::io::ReaderStream::new(f);
         ret = ret.chain(f).boxed();
@@ -48,23 +48,26 @@ async fn main() -> Result<()> {
     // Background driver that manages things like timeouts.
     let _driver = tokio::spawn(connection);
 
-    let req = Request::builder()
-        .header("Host", "localhost")
-        .method("GET")
-        .uri("/")
-        .body(Body::from(""))?;
-    let mut resp = request_sender.send_request(req).await?;
-    if !resp.status().is_success() {
-        return Err(anyhow::anyhow!("request error: {}", resp.status()));
+    for _ in 0..2 {
+        let req = Request::builder()
+            .header("Host", "localhost")
+            .method("GET")
+            .uri("/")
+            .body(Body::from(""))?;
+        let mut resp = request_sender.send_request(req).await?;
+        if !resp.status().is_success() {
+            return Err(anyhow::anyhow!("request error: {}", resp.status()));
+        }
+        let mut fetched_digest =
+            openssl::hash::Hasher::new(openssl::hash::MessageDigest::sha256())?;
+        while let Some(chunk) = resp.body_mut().data().await {
+            let chunk = chunk?;
+            fetched_digest.write_all(&chunk)?;
+        }
+        let fetched_digest = fetched_digest.finish()?;
+        let fetched_digest: &[u8] = &fetched_digest;
+        assert_eq!(self_digest, fetched_digest);
     }
-    let mut fetched_digest = openssl::hash::Hasher::new(openssl::hash::MessageDigest::sha256())?;
-    while let Some(chunk) = resp.body_mut().data().await {
-        let chunk = chunk?;
-        fetched_digest.write_all(&chunk)?;
-    }
-    let fetched_digest = fetched_digest.finish()?;
-    let fetched_digest: &[u8] = &fetched_digest;
-    assert_eq!(self_digest, fetched_digest);
 
     Ok(())
 }
